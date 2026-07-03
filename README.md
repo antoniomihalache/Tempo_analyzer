@@ -31,3 +31,9 @@ It includes:
 - slowest boundary hop detection
 - DB and RabbitMQ summaries
 - exported `analysis.md`, `summary.md`, `waterfall.md`, `spans.csv`, `hops.csv`, `service-graph.mmd`, and interactive `index.html`
+
+## v0.4.1
+
+- Fixed exported HTML service graph rendering when UI filters are active.
+- Exported HTML now uses the full trace graph, not the currently filtered in-app graph.
+- Replaced the exported SVG layout with a stable first-seen grid layout so cyclic traces do not collapse into an empty-looking graph.

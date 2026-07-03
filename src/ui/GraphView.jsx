@@ -29,7 +29,7 @@ export function GraphView({ graph, activeNodeId, pinnedNodeId, critical, onHover
     const cy = cytoscape({
       container: ref.current,
       elements,
-      wheelSensitivity: 1.70,
+      wheelSensitivity: 2.5,
       minZoom: 0.05,
       maxZoom: 2.5,
       style: [

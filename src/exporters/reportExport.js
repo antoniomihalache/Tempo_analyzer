@@ -1,5 +1,6 @@
 import { spanLabel } from '../parser/tempoParser.js';
 import { analysisMarkdown, analyzeTrace } from '../analysis/traceAnalysis.js';
+import { buildGraph } from '../graph/buildGraph.js';
 
 function download(filename, text, mime = 'text/plain') {
   const blob = new Blob([text], { type: mime });
@@ -46,32 +47,74 @@ export function serviceGraphMmd(graph) {
   return `${lines.join('\n')}\n`;
 }
 
-function computeSvgLayout(graph) {
-  const ranks = new Map();
-  const roots = graph.roots.length ? graph.roots : graph.nodes.slice(0, 1).map(n => n.id);
-  const q = roots.map(id => [id, 0]); roots.forEach(id => ranks.set(id, 0));
-  while (q.length) { const [id, rank] = q.shift(); for (const next of graph.adjacency.get(id) || []) { const nr = rank + 1; if (!ranks.has(next) || nr > ranks.get(next)) { ranks.set(next, nr); if (nr < 14) q.push([next, nr]); } } }
-  for (const n of graph.nodes) if (!ranks.has(n.id)) ranks.set(n.id, 0);
-  const byRank = new Map();
-  for (const n of graph.nodes) { const r = ranks.get(n.id) || 0; if (!byRank.has(r)) byRank.set(r, []); byRank.get(r).push(n); }
-  const rankKeys = [...byRank.keys()].sort((a,b)=>a-b);
-  const xGap = 360, yGap = 106, margin = 70, nodeW = 250, nodeH = 62;
-  const maxRows = Math.max(...[...byRank.values()].map(v => v.length), 1);
-  const width = Math.max(1200, margin*2 + (rankKeys.length-1)*xGap + nodeW);
-  const height = Math.max(760, margin*2 + maxRows*yGap + nodeH);
+function computeSvgLayout(graph, trace = null) {
+  const nodeW = 260;
+  const nodeH = 64;
+  const xGap = 340;
+  const yGap = 112;
+  const margin = 80;
+
+  const nodes = graph.nodes || [];
+  const edges = graph.edges || [];
   const pos = new Map();
-  for (const r of rankKeys) {
-    const arr = byRank.get(r).sort((a,b)=>String(a.id).localeCompare(String(b.id)));
-    const blockH = (arr.length - 1) * yGap;
-    const startY = margin + Math.max(0, (height - margin*2 - blockH) / 2);
-    arr.forEach((n, i) => pos.set(n.id, { x: margin + r*xGap, y: startY + i*yGap, w: nodeW, h: nodeH }));
+  if (!nodes.length) return { pos, width: 1200, height: 760 };
+
+  // Use the first occurrence in the trace to keep the exported report readable and stable.
+  // This avoids the old rank-based layout collapsing into an empty-looking graph when the
+  // service graph contains cycles or when no root can be inferred.
+  const firstSeen = new Map();
+  if (trace?.spans?.length) {
+    for (const span of trace.spans) {
+      const offset = Number(span.startOffsetMs || 0);
+      if (span.service && !firstSeen.has(span.service)) firstSeen.set(span.service, offset);
+    }
   }
+  for (const edge of edges) {
+    if (!firstSeen.has(edge.source)) firstSeen.set(edge.source, 0);
+    if (!firstSeen.has(edge.target)) firstSeen.set(edge.target, (firstSeen.get(edge.source) || 0) + 1);
+  }
+
+  const indegree = new Map(nodes.map(n => [n.id, 0]));
+  const outdegree = new Map(nodes.map(n => [n.id, 0]));
+  for (const edge of edges) {
+    indegree.set(edge.target, (indegree.get(edge.target) || 0) + 1);
+    outdegree.set(edge.source, (outdegree.get(edge.source) || 0) + 1);
+  }
+
+  const ordered = nodes.slice().sort((a, b) => {
+    const fa = firstSeen.has(a.id) ? firstSeen.get(a.id) : Number.POSITIVE_INFINITY;
+    const fb = firstSeen.has(b.id) ? firstSeen.get(b.id) : Number.POSITIVE_INFINITY;
+    if (fa !== fb) return fa - fb;
+    return String(a.id).localeCompare(String(b.id));
+  });
+
+  // Put services into columns in first-seen order. This produces a full-picture graph that
+  // is much easier to embed in Confluence/Jira than Mermaid spaghetti.
+  const maxPerColumn = 10;
+  const columns = [];
+  ordered.forEach((n, idx) => {
+    const col = Math.floor(idx / maxPerColumn);
+    if (!columns[col]) columns[col] = [];
+    columns[col].push(n);
+  });
+
+  const width = Math.max(1400, margin * 2 + Math.max(1, columns.length - 1) * xGap + nodeW);
+  const height = Math.max(860, margin * 2 + Math.max(...columns.map(c => c.length), 1) * yGap + nodeH);
+
+  columns.forEach((colNodes, colIdx) => {
+    const blockH = (colNodes.length - 1) * yGap;
+    const startY = margin + Math.max(0, (height - margin * 2 - blockH) / 2);
+    colNodes.forEach((n, rowIdx) => {
+      pos.set(n.id, { x: margin + colIdx * xGap, y: startY + rowIdx * yGap, w: nodeW, h: nodeH });
+    });
+  });
+
   return { pos, width, height };
 }
 
 export function htmlReport(trace, graph) {
   const a = analyzeTrace(trace, graph);
-  const { pos, width, height } = computeSvgLayout(graph);
+  const { pos, width, height } = computeSvgLayout(graph, trace);
   const data = JSON.stringify({
     nodes: graph.nodes.map(n => ({ id: n.id, label: n.label || n.id, type: n.type, totalMs: n.totalMs, spanCount: n.spanCount })),
     edges: graph.edges.map(e => ({ id: e.id, source: e.source, target: e.target, label: e.label, calls: e.calls, totalMs: e.totalMs, topLabel: e.topLabel })),
@@ -92,7 +135,7 @@ body{font-family:Inter,system-ui,sans-serif;background:#08111f;color:#e5e7eb;mar
 </style></head><body><h1>Distributed Trace Analysis</h1><p class="muted">Trace ID ${esc(trace.spans[0]?.traceId || '-')} • ${a.metrics.spanCount} spans • ${a.metrics.serviceHopCount} service hops • ${a.metrics.criticalPathLength} critical-path steps • ${fmt(trace.wallTimeMs)} wall time</p>
 <div class="card"><h2>Headline metrics</h2><p><span class="pill">Span count: ${a.metrics.spanCount}</span><span class="pill">Service hops: ${a.metrics.serviceHopCount}</span><span class="pill">Unique edges: ${a.metrics.uniqueServiceHopCount}</span><span class="pill">Critical path length: ${a.metrics.criticalPathLength}</span><span class="pill">Critical path duration: ${fmt(a.metrics.criticalPathDurationMs)}</span></p><p class="muted">Span count measures recorded work. Service hop count measures cross-boundary traffic. Critical path length measures dependent boundary steps on the latest/longest parent chain.</p></div>
 <div class="card"><h2>Conclusion</h2><ul class="findings">${findings}</ul></div>
-<div class="card"><h2>Interactive service graph</h2><p class="muted">Hover or click a service to highlight upstream/downstream request path. Details appear below, so the graph keeps full width.</p><div class="graphWrap"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"></path></marker>${pathDefs}</defs>${edgeSvg}${nodeSvg}</svg></div><div id="nodeDetails" class="card"><b>Hover or click a node</b><p class="muted">The upstream/downstream request path will be highlighted here.</p></div></div>
+<div class="card"><h2>Interactive service graph</h2><p class="muted">Hover or click a service to highlight upstream/downstream request path. Details appear below, so the graph keeps full width.</p><p class="muted">${graph.nodes.length} nodes • ${graph.edges.length} edges. This exported graph is generated from the full trace, not from the current UI filters.</p><div class="graphWrap"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"></path></marker>${pathDefs}</defs>${edgeSvg}${nodeSvg}</svg></div><div id="nodeDetails" class="card"><b>Hover or click a node</b><p class="muted">The upstream/downstream request path will be highlighted here.</p></div></div>
 <div class="card grid"><div><h2>Potential redundant trips</h2><table><tr><th>Edge</th><th>Calls</th><th>Total</th><th>Max</th></tr>${repeatedRows || '<tr><td colspan="4">No repeated trips found.</td></tr>'}</table></div><div><h2>Longest hops</h2><table><tr><th>Hop</th><th>Operation</th><th>Duration</th><th>Offset</th></tr>${slowRows}</table></div></div>
 <div class="card"><h2>Full hop timeline</h2><div class="tableBox"><table><tr><th>#</th><th>Offset</th><th>Duration</th><th>Hop</th><th>Type</th><th>Operation</th><th>Status</th></tr>${hopRows}</table></div></div>
 <div class="card"><h2>Analysis Markdown</h2><pre>${esc(analysisMarkdown(trace, graph))}</pre></div>
@@ -100,11 +143,23 @@ body{font-family:Inter,system-ui,sans-serif;background:#08111f;color:#e5e7eb;mar
 }
 
 export function downloadReportFiles(trace, graph) {
-  download('summary.md', summaryMd(trace, graph));
-  download('analysis.md', analysisMarkdown(trace, graph));
+  // Export should be a full, shareable analysis, not the currently filtered UI graph.
+  // The filtered graph is useful in the app, but it can accidentally produce an empty
+  // or partial exported HTML report if the user has search/type/min-duration filters active.
+  const exportGraph = buildGraph(trace, {
+    minCalls: 1,
+    showInfra: true,
+    query: '',
+    minDuration: 0,
+    topEdges: 10000,
+    types: new Set(['http-server', 'http-client', 'database', 'messaging', 'internal'])
+  });
+
+  download('summary.md', summaryMd(trace, exportGraph));
+  download('analysis.md', analysisMarkdown(trace, exportGraph));
   download('waterfall.md', waterfallMd(trace));
   download('spans.csv', spansCsv(trace), 'text/csv');
-  download('hops.csv', hopsCsv(trace, graph), 'text/csv');
-  download('service-graph.mmd', serviceGraphMmd(graph));
-  download('index.html', htmlReport(trace, graph), 'text/html');
+  download('hops.csv', hopsCsv(trace, exportGraph), 'text/csv');
+  download('service-graph.mmd', serviceGraphMmd(exportGraph));
+  download('index.html', htmlReport(trace, exportGraph), 'text/html');
 }
