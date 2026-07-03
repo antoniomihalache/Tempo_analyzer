@@ -1,34 +1,33 @@
 # Tempo Distributed Trace Analyzer
 
-Standalone React/Vite app for analyzing Grafana Tempo JSON exports.
+Standalone browser-based analyzer for Grafana Tempo / OpenTelemetry JSON exports.
 
 ## Run
 
 ```bash
+npm config set registry https://registry.npmjs.org/
 npm install
-npm run dev
+npm start
 ```
 
-Open the local Vite URL and upload a Grafana/Tempo JSON trace export.
+Open the shown URL and upload a Tempo JSON export.
 
-## What it shows
+## Analysis Engine v1
 
-- Service graph with pan/zoom, hover/click path highlighting, and optional critical path highlighting.
-- Full request path: every cross-service/external hop in chronological order, including timing, status, operation, and repeated-hop markers.
-- All-spans mode: full span timeline including internal/middleware spans.
-- Analysis tab: automatic conclusions, slowest hops, repeated trips, revisited services, request start/end, and recommendations.
-- Waterfall and spans table.
-- Export report files: `summary.md`, `analysis.md`, `waterfall.md`, `spans.csv`, `hops.csv`, `service-graph.mmd`, and an interactive standalone `index.html` report suitable for Confluence/Jira attachment.
+The analyzer now produces a structured report object instead of simple heuristic recommendation strings.
 
-## Critical path checkbox
+It includes:
 
-Critical path highlights the heaviest connected chain in the currently visible service graph, using accumulated edge duration. It is a latency-focused approximation. It is useful for spotting the path that contributes the most time, but it is not the exact CPU execution path and it changes when filters change.
-
-
-## v5 updates
-
-- Redesigned Waterfall view.
-- Service column is compact and uses shortened labels with full names on hover.
-- Timeline column is wider and behaves like a real trace timeline with a time ruler.
-- Timeline bars are positioned by span start offset and sized by duration.
-- Colors distinguish HTTP, database, messaging, and internal spans.
+- executive summary
+- performance score
+- structured findings
+- severity and confidence per finding
+- evidence per finding
+- impact statement
+- recommendation per finding
+- span count, service hop count, critical path length
+- repeated service communication detection
+- duplicate operation pattern detection
+- slowest boundary hop detection
+- DB and RabbitMQ summaries
+- exported `analysis.md`, `summary.md`, `waterfall.md`, `spans.csv`, `hops.csv`, `service-graph.mmd`, and interactive `index.html`
